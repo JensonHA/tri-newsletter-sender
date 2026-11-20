@@ -1,0 +1,61 @@
+name: Newsletter-Versand
+
+on:
+  schedule:
+    # alle 5 Minuten (UTC), nicht zur vollen Stunde, damit weniger Verzoegerung entsteht
+    - cron: '1-56/5 * * * *'
+  workflow_dispatch:   # Knopf "Run workflow" fuer einen sofortigen Lauf von Hand
+
+concurrency:
+  group: newsletter-sender
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP und Mail-Ports pruefen
+        run: |
+          php -v | head -n 1
+          php -m | grep -E '^(curl|openssl)$'
+          for p in 587 465; do
+            if timeout 6 bash -c "</dev/tcp/smtp.ionos.de/$p" 2>/dev/null; then
+              echo "Port $p zu smtp.ionos.de: offen"
+            else
+              echo "Port $p zu smtp.ionos.de: nicht erreichbar"
+            fi
+          done
+
+      - name: Zustand wiederherstellen
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: newsletter-state-${{ github.run_id }}
+          restore-keys: newsletter-state-
+
+      - name: Mails versenden
+        env:
+          NEWSLETTER_SENDER_TOKEN: ${{ secrets.NEWSLETTER_SENDER_TOKEN }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_HOST: smtp.ionos.de
+          SMTP_PORT: '587'
+          SMTP_SECURE: tls
+        run: php newsletter-sender.php newsletter-sender.config.php
+
+      - name: Zustand speichern
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: newsletter-state-${{ github.run_id }}
+
+      - name: Log anzeigen
+        if: always()
+        run: tail -n 30 state/newsletter-sender.log || true
